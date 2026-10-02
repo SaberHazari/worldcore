@@ -11,53 +11,52 @@ bool location_table_init(LocationTable *table, u32 capacity) {
     
     memset(table, 0, sizeof(*table));
     
-    table->locations = calloc(capacity, sizeof(*table->locations));
-    if(table->locations == NULL) {
-        return false;
-    }
-    
+    table->locations = calloc(capacity,     sizeof(*table->locations));
     table->child_offsets = calloc(capacity + 1, sizeof(*table->child_offsets));
-    if(table->child_offsets == NULL) {
-        free(table->locations);
-        memset(table, 0, sizeof(*table));
-        return false;
-    }
-    
+    table->child_ids = calloc(capacity,     sizeof(*table->child_ids));
     table->connection_offsets = calloc(capacity + 1, sizeof(*table->connection_offsets));
-    if(table->connection_offsets == NULL) {
-        free(table->child_offsets);
-        free(table->locations);
-        memset(table, 0, sizeof(*table));
-        return false;
-    }
+    table->connection_ids = calloc(capacity,     sizeof(*table->connection_ids));
+    table->connection_distances = calloc(capacity,     sizeof(*table->connection_distances));
+    table->connection_modes = calloc(capacity,     sizeof(*table->connection_modes));
     
     u32 pool_bytes = kilo_bytes(LOCATION_DEFAULT_NAME_POOL_KB);
     table->name_pool = malloc(pool_bytes);
-    if(table->name_pool == NULL) {
-        free(table->connection_offsets);
-        free(table->child_offsets);
-        free(table->locations);
-        memset(table, 0, sizeof(*table));
+    
+    if(table->locations            == NULL || 
+        table->child_offsets        == NULL || 
+        table->child_ids            == NULL || 
+        table->connection_offsets   == NULL || 
+        table->connection_ids       == NULL || 
+        table->connection_distances == NULL || 
+        table->connection_modes     == NULL || 
+        table->name_pool            == NULL
+    ) {
+        location_table_free(table);
         return false;
     }
-    table->name_pool_capacity = pool_bytes;
     
     table->count = 0;
     table->capacity = capacity;
+    table->child_ids_capacity = capacity;
+    table->connection_capacity = capacity;
     table->name_pool_used = 0;
+    table->name_pool_capacity = pool_bytes;
     
     return true;
 }
 
 void location_table_free(LocationTable *table) {
     if(table == NULL) { return; }
+    
     free(table->locations);
     free(table->name_pool);
     free(table->child_offsets);
     free(table->child_ids);
     free(table->connection_offsets);
     free(table->connection_ids);
-    free(table->connection_times);
+    free(table->connection_distances);
+    free(table->connection_modes);
+    
     memset(table, 0, sizeof(*table));
 }
 
@@ -66,6 +65,10 @@ u32 location_table_add(LocationTable *table, const char *name, u32 parent) {
     if(table->locations == NULL) { return LOCATION_NONE; }
     
     if(table->count >= table->capacity) {
+        return LOCATION_NONE;
+    }
+    
+    if(parent != LOCATION_NONE && parent >= table->count) {
         return LOCATION_NONE;
     }
     
@@ -86,7 +89,7 @@ u32 location_table_add(LocationTable *table, const char *name, u32 parent) {
     
     Location *location = &table->locations[id];
     location->id = id;
-    location->parent = parent;
+    location->parent = LOCATION_NONE;
     location->name_offset = name_offset;
     location->name_len = (u16)name_len;
     
@@ -94,5 +97,10 @@ u32 location_table_add(LocationTable *table, const char *name, u32 parent) {
     table->connection_offsets[id + 1] = table->connection_offsets[id];
     
     table->count++;
+    
+    if(parent != LOCATION_NONE) {
+        location_add_child(table, parent, id);
+    }
+    
     return id;
 }
