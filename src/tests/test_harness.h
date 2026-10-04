@@ -21,6 +21,7 @@ extern int global_tests_failed;
         global_tests_failed++;                                         \
         printf("  FAIL %s:%d  %s (required, test aborted)\n",          \
         __FILE__, __LINE__, #condition);                               \
+        return;                                                        \
     }                                                                  \
 } while(0)
 

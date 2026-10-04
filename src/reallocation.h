@@ -1,6 +1,8 @@
 #ifndef REALLOCATION_H
 #define REALLOCATION_H
 
+#include "utils.h"
+
 #include <stdlib.h>
 
 #define grow_field(table, field, count) do {                                        \

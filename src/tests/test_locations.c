@@ -167,7 +167,7 @@ static void test_add_growth(void) {
     for(u32 i = 0; i < num; ++i) {
         char expected_name[16];
         snprintf(expected_name, sizeof(expected_name), "L%u", i);
-        u32 expected_parent = (i = 0) ? LOCATION_NONE : (i - 1) / 2;
+        u32 expected_parent = (i == 0) ? LOCATION_NONE : (i - 1) / 2;
         u32 expected_children[2];
         u32 expected_count = 0;
         if((2 * i + 1) < num) { expected_children[expected_count++] = 2 * i + 1; }
@@ -253,24 +253,24 @@ static void test_reserve(void) {
     u32 parent;
     for(u32 i = 2; i < 7; ++i) {
         snprintf(name, sizeof(name), "L%u", i);
-        parent = (i = 0) ? LOCATION_NONE : (i - 1) / 2;
+        parent = (i == 0) ? LOCATION_NONE : (i - 1) / 2;
         a[i] = location_table_add(&table, name, parent);
     }
     test_assert_eq_u32(table.capacity, 8);
     for(u32 i = 7; i < 102; ++i) {
         snprintf(name, sizeof(name), "L%u", i);
-        parent = (i = 0) ? LOCATION_NONE : (i - 1) / 2;
+        parent = (i == 0) ? LOCATION_NONE : (i - 1) / 2;
         a[i] = location_table_add(&table, name, parent);
     }
     test_assert_eq_u32(table.capacity, 128);
     
-    const u32 expected_children[] = { a[1] };
+   const u32 expected_children[] = { a[1], a[2] };
     const u32 expected_ids[] = { a[1] };
     const u32 expected_distances[] = { 5 };
     const u8 expected_modes[] = { TRAVEL_MODE_WALK };
     test_assert(strcmp(location_name(&table, a[1]), "B") == 0);
     test_assert_eq_u32(location_get(&table, a[1])->parent, a[0]);
-    test_assert(children_are(&table, a[0], expected_children, 1));
+    test_assert(children_are(&table, a[0], expected_children, 2));
     test_assert(edges_are(&table, a[0], expected_ids, expected_distances, expected_modes, 1));
     
     location_table_free(&table);

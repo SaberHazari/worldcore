@@ -53,7 +53,7 @@ NODISCARD bool location_add_child(LocationTable *table, u32 parent, u32 child);
 NODISCARD bool location_connect(LocationTable *table, u32 a, u32 b, u32 distance, u8 modes);
 
 const char *location_name(const LocationTable *table, u32 id);
-const Location *location_get(LocationTable *table, u32 id);
+const Location *location_get(const LocationTable *table, u32 id);
 const u32 *location_children(const LocationTable *table, u32 id, u32 *out_count);
 LocationEdges location_edges(const LocationTable *table, u32 id);
 

@@ -157,7 +157,7 @@ const char *location_name(const LocationTable *table, u32 id) {
     return (table->name_pool + table->locations[id].name_offset);
 }
 
-const Location *location_get(LocationTable *table, u32 id) {
+const Location *location_get(const LocationTable *table, u32 id) {
     if(table == NULL) { return NULL; }
     if(id >= table->count) { return NULL; }
     return &table->locations[id];
