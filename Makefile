@@ -18,10 +18,15 @@ TEST_OUT_DIR    := $(BUILD_DIR)/test
 TEST_OBJ_DIR    := $(TEST_OUT_DIR)/obj
 
 # Flags
-COMMON_FLAGS  = -Wall -Wextra -std=c17 -Isrc/
-DEBUG_FLAGS   = $(COMMON_FLAGS) -g -O0
-RELEASE_FLAGS = $(COMMON_FLAGS) -O2
-TEST_FLAGS    = $(COMMON_FLAGS) -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer
+WARN_FLAGS     = -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wstrict-prototypes
+DEBUG_SANITIZE ?= address,undefined
+TEST_SANITIZE  ?= address,undefined
+sanitize_flags  = $(if $(1),-fsanitize=$(1) -fno-omit-frame-pointer)
+
+COMMON_FLAGS  = $(WARN_FLAGS) -std=c17 -Isrc/
+DEBUG_FLAGS   = $(COMMON_FLAGS) -g -O0 $(call sanitize_flags,$(DEBUG_SANITIZE))
+RELEASE_FLAGS = $(COMMON_FLAGS) -O2 -DNDEBUG
+TEST_FLAGS    = $(COMMON_FLAGS) -g -O1 $(call sanitize_flags,$(TEST_SANITIZE))
 
 # Source discovery
 MAIN_SRC      := $(SRC_DIR)/main.c
@@ -47,7 +52,7 @@ RELEASE_BIN := $(RELEASE_DIR)/main
 TEST_BIN    := $(TEST_OUT_DIR)/test
 
 # Phony targets
-.PHONY: all run clean debug debug-run release release-run test test-run
+.PHONY: all run clean debug debug-run release release-run test test-build
 
 all: debug
 run: debug-run

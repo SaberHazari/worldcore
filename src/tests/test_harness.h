@@ -15,6 +15,15 @@ extern int global_tests_failed;
     }                                                                  \
 } while(0)
 
+#define test_require(condition) do {                                   \
+    global_tests_run++;                                                \
+    if(!(condition)) {                                                 \
+        global_tests_failed++;                                         \
+        printf("  FAIL %s:%d  %s (required, test aborted)\n",          \
+        __FILE__, __LINE__, #condition);                               \
+    }                                                                  \
+} while(0)
+
 #define test_assert_eq_u32(a, b) do {                                  \
     global_tests_run++;                                                \
     u32 _a = (a), _b = (b);                                            \

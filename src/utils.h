@@ -22,4 +22,10 @@ typedef uint32_t b32;
 
 #define kilo_bytes(value) ((u32)(value) * 1024)
 
+#if defined(__GNUC__) || defined(__clang__)
+    #define NODISCARD __attribute__((warn_unused_result))
+#else
+    #define NODISCARD
+#endif
+
 #endif // UTILS_H

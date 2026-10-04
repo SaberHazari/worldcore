@@ -1,26 +1,35 @@
 #include "locations.h"
+#include "reallocation.h"
 
-#include <stdlib.h>
+#include <assert.h>
 #include <string.h>
 
 #define LOCATION_DEFAULT_NAME_POOL_KB 64
 
-static bool connection_grow(LocationTable *table, u32 needed);
+static bool location_table_reserve(LocationTable *table, u64 capacity);
+static bool name_pool_reserve(LocationTable *table, u64 needed);
+static void child_insert_raw(LocationTable *table, u32 parent, u32 child);
+static bool connection_overlaps(const LocationTable *table, u32 a, u32 b, u8 modes);
+static bool connection_grow(LocationTable *table, u64 needed);
 static void connection_insert_raw(LocationTable *table, u32 from, u32 to, u32 distance, u8 modes);
 
 bool location_table_init(LocationTable *table, u32 capacity) {
     if(table == NULL) { return false; }
-    if(capacity == 0) { return false; }
     
     memset(table, 0, sizeof(*table));
     
-    table->locations            = calloc(capacity,     sizeof(*table->locations));
-    table->child_offsets        = calloc(capacity + 1, sizeof(*table->child_offsets));
-    table->child_ids            = calloc(capacity,     sizeof(*table->child_ids));
-    table->connection_offsets   = calloc(capacity + 1, sizeof(*table->connection_offsets));
-    table->connection_ids       = calloc(capacity,     sizeof(*table->connection_ids));
-    table->connection_distances = calloc(capacity,     sizeof(*table->connection_distances));
-    table->connection_modes     = calloc(capacity,     sizeof(*table->connection_modes));
+    if(capacity == 0) { return false; }
+    if(capacity > LOCATION_MAX_COUNT) { return false; }
+    
+    size_t offsets_count = (size_t)capacity + 1;
+    
+    table->locations            = calloc(capacity,      sizeof(*table->locations));
+    table->child_offsets        = calloc(offsets_count, sizeof(*table->child_offsets));
+    table->child_ids            = calloc(capacity,      sizeof(*table->child_ids));
+    table->connection_offsets   = calloc(offsets_count, sizeof(*table->connection_offsets));
+    table->connection_ids       = calloc(capacity,      sizeof(*table->connection_ids));
+    table->connection_distances = calloc(capacity,      sizeof(*table->connection_distances));
+    table->connection_modes     = calloc(capacity,      sizeof(*table->connection_modes));
     
     u32 pool_bytes = kilo_bytes(LOCATION_DEFAULT_NAME_POOL_KB);
     table->name_pool = malloc(pool_bytes);
@@ -40,7 +49,6 @@ bool location_table_init(LocationTable *table, u32 capacity) {
     
     table->count = 0;
     table->capacity = capacity;
-    table->child_ids_capacity = capacity;
     table->connection_capacity = capacity;
     table->name_pool_used = 0;
     table->name_pool_capacity = pool_bytes;
@@ -67,25 +75,28 @@ u32 location_table_add(LocationTable *table, const char *name, u32 parent) {
     if(table == NULL || name == NULL) { return LOCATION_NONE; }
     if(table->locations == NULL) { return LOCATION_NONE; }
     
-    if(table->count >= table->capacity) {
-        return LOCATION_NONE;
-    }
-    
     if(parent != LOCATION_NONE && parent >= table->count) {
         return LOCATION_NONE;
     }
     
-    u64 len_raw = strlen(name);
+    size_t len_raw = strlen(name);
     if(len_raw > UINT16_MAX) { return LOCATION_NONE; }
     
     u32 name_len = (u32)len_raw;
     u32 bytes_to_copy = name_len + 1;
-    if(bytes_to_copy > (table->name_pool_capacity - table->name_pool_used)) {
+    
+    if(!name_pool_reserve(table, (u64)table->name_pool_used + bytes_to_copy)) {
         return LOCATION_NONE;
+    }
+    if(table->count == table->capacity) {
+        if(table->count >= LOCATION_MAX_COUNT) { return LOCATION_NONE; }
+        
+        u64 doubled = (u64)table->capacity * 2;
+        u32 new_capacity = (doubled > LOCATION_MAX_COUNT) ? LOCATION_MAX_COUNT : (u32)doubled;
+        if(!location_table_reserve(table, new_capacity)) { return LOCATION_NONE; }
     }
     
     u32 id = table->count;
-    
     u32 name_offset = table->name_pool_used;
     memcpy(table->name_pool + name_offset, name, bytes_to_copy);
     table->name_pool_used += bytes_to_copy;
@@ -102,9 +113,8 @@ u32 location_table_add(LocationTable *table, const char *name, u32 parent) {
     table->count++;
     
     if(parent != LOCATION_NONE) {
-        location_add_child(table, parent, id);
+        child_insert_raw(table, parent, id);
     }
-    
     return id;
 }
 
@@ -112,34 +122,15 @@ bool location_add_child(LocationTable *table, u32 parent, u32 child) {
     if(table == NULL) { return false; }
     if(parent >= table->count) { return false; }
     if(child >= table->count) { return false; }
-    if(parent == child) { return false; }
     if(table->locations[child].parent != LOCATION_NONE) { return false; }
     
-    u32 total = table->child_offsets[table->count];
-    
-    if(total >= table->child_ids_capacity) {
-        u32 new_cap = table->child_ids_capacity ? (table->child_ids_capacity * 2) : 4;
-        u32 *new_ids = realloc(table->child_ids, new_cap * sizeof(u32));
-        if(new_ids == NULL) { return false; }
-        table->child_ids = new_ids;
-        table->child_ids_capacity = new_cap;
+    u32 steps = 0;
+    for(u32 cur = parent; cur != LOCATION_NONE; cur = table->locations[cur].parent) {
+        if(cur == child) { return false; }
+        if(++steps > table->count) { return false; }
     }
     
-    u32 insert_pos = table->child_offsets[parent + 1];
-    u32 tail = total - insert_pos;
-    
-    if(tail > 0) {
-        memmove(&table->child_ids[insert_pos + 1], 
-            &table->child_ids[insert_pos], 
-            tail * sizeof(u32));
-    }
-    table->child_ids[insert_pos] = child;
-    
-    for(u32 i = parent + 1; i <= table->count; ++i) {
-        table->child_offsets[i]++;
-    }
-    
-    table->locations[child].parent = parent;
+    child_insert_raw(table, parent, child);
     return true;
 }
 
@@ -150,7 +141,9 @@ bool location_connect(LocationTable *table, u32 a, u32 b, u32 distance, u8 modes
     if(a == b) { return false; }
     if(modes == 0) { return false; }
     
-    u32 total = table->connection_offsets[table->count];
+    if(connection_overlaps(table, a, b, modes)) { return false; }
+    
+    u64 total = table->connection_offsets[table->count];
     if(!connection_grow(table, total + 2)) { return false; }
     
     connection_insert_raw(table, a, b, distance, modes);
@@ -164,50 +157,132 @@ const char *location_name(const LocationTable *table, u32 id) {
     return (table->name_pool + table->locations[id].name_offset);
 }
 
-Location *location_get(LocationTable *table, u32 id) {
+const Location *location_get(LocationTable *table, u32 id) {
     if(table == NULL) { return NULL; }
     if(id >= table->count) { return NULL; }
     return &table->locations[id];
 }
 
-static bool connection_grow(LocationTable *table, u32 needed) {
+const u32 *location_children(const LocationTable *table, u32 id, u32 *out_count) {
+    if(out_count != NULL) { *out_count = 0; }
+    if(table == NULL) { return NULL; }
+    if(id >= table->count) { return NULL; }
+    
+    u32 start = table->child_offsets[id];
+    if(out_count != NULL) { *out_count = table->child_offsets[id + 1] - start; }
+    return &table->child_ids[start];
+}
+
+LocationEdges location_edges(const LocationTable *table, u32 id) {
+    LocationEdges edges = {0};
+    if(table == NULL) { return edges; }
+    if(id >= table->count) { return edges; }
+    
+    u32 start = table->connection_offsets[id];
+    
+    edges.count     = table->connection_offsets[id + 1] - start;
+    edges.ids       = &table->connection_ids[start];
+    edges.distances = &table->connection_distances[start];
+    edges.modes     = &table->connection_modes[start];
+    return edges;
+}
+
+static bool location_table_reserve(LocationTable *table, u64 capacity) {
+    if(table == NULL) { return false; }
+    if(table->locations == NULL) { return false; }
+    if(capacity <= table->capacity) { return false; }
+    if(capacity > LOCATION_MAX_COUNT) { return false; }
+    
+    grow_field(table, locations,          capacity);
+    grow_field(table, child_offsets,      capacity + 1);
+    grow_field(table, child_ids,          capacity);
+    grow_field(table, connection_offsets, capacity + 1);
+    
+    table->capacity = (u32)capacity;
+    return true;
+}
+
+static bool name_pool_reserve(LocationTable *table, u64 needed) {
+    if(needed <= table->name_pool_capacity) { return true; }
+    if(needed > UINT32_MAX) { return false; }
+    
+    u64 new_capacity = table->name_pool_capacity ? table->name_pool_capacity : kilo_bytes(LOCATION_DEFAULT_NAME_POOL_KB);
+    while(new_capacity < needed) { new_capacity *= 2; }
+    if(new_capacity > UINT32_MAX) { new_capacity = UINT32_MAX; }
+    
+    grow_field(table, name_pool, new_capacity);
+    table->name_pool_capacity = (u32)new_capacity;
+    
+    return true;
+}
+
+static void child_insert_raw(LocationTable *table, u32 parent, u32 child) {
+    u32 total = table->child_offsets[table->count];
+    
+    assert(total < table->capacity);
+    
+    u32 insert_pos = table->child_offsets[parent + 1];
+    u32 tail = total - insert_pos;
+    
+    if(tail > 0) {
+        memmove(&table->child_ids[insert_pos + 1], 
+            &table->child_ids[insert_pos], 
+            tail * sizeof(*table->child_ids));
+    }
+    table->child_ids[insert_pos] = child;
+    
+    for(u32 i = parent + 1; i <= table->count; ++i) {
+        table->child_offsets[i]++;
+    }
+    
+    table->locations[child].parent = parent;
+}
+
+static bool connection_overlaps(const LocationTable *table, u32 a, u32 b, u8 modes) {
+    u32 start = table->connection_offsets[a];
+    u32 end = table->connection_offsets[a + 1];
+    
+    for(u32 i = start; i < end; ++i) {
+        if(table->connection_ids[i] == b && (table->connection_modes[i] & modes) != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool connection_grow(LocationTable *table, u64 needed) {
     if(table->connection_capacity >= needed) { return true; }
-    if(needed > UINT32_MAX / 2) { return false; }
+    if(needed > UINT32_MAX) { return false; }
     
-    u32 new_cap = table->connection_capacity ? table->connection_capacity : 4;
-    while(new_cap < needed) { new_cap *= 2; }
+    u64 new_capacity = table->connection_capacity ? table->connection_capacity : 4;
+    while(new_capacity < needed) { new_capacity *= 2; }
+    if(new_capacity > UINT32_MAX) { new_capacity = UINT32_MAX; }
     
-    u32 *new_ids = realloc(table->connection_ids, new_cap * sizeof(u32));
-    if(new_ids == NULL) { return false; }
-    table->connection_ids = new_ids;
+    grow_field(table, connection_ids,       new_capacity);
+    grow_field(table, connection_distances, new_capacity);
+    grow_field(table, connection_modes,     new_capacity);
     
-    u32 *new_dists = realloc(table->connection_distances, new_cap * sizeof(u32));
-    if(new_dists == NULL) { return false; }
-    table->connection_distances = new_dists;
-    
-    u8 *new_modes = realloc(table->connection_modes, new_cap * sizeof(u8));
-    if(new_modes == NULL) { return false; }
-    table->connection_modes = new_modes;
-    
-    table->connection_capacity = new_cap;
+    table->connection_capacity = (u32)new_capacity;
     return true;
 }
 
 static void connection_insert_raw(LocationTable *table, u32 from, u32 to, u32 distance, u8 modes) {
     u32 total = table->connection_offsets[table->count];
+    assert(total < table->connection_capacity);
+    
     u32 insert_pos = table->connection_offsets[from + 1];
     u32 tail = total - insert_pos;
     
     if(tail > 0) {
         memmove(&table->connection_ids[insert_pos + 1], 
             &table->connection_ids[insert_pos], 
-            tail * sizeof(u32));
+            tail * sizeof(*table->connection_ids));
         memmove(&table->connection_distances[insert_pos + 1], 
             &table->connection_distances[insert_pos], 
-            tail * sizeof(u32));
+            tail * sizeof(*table->connection_distances));
         memmove(&table->connection_modes[insert_pos + 1], 
             &table->connection_modes[insert_pos], 
-            tail * sizeof(u8));
+            tail * sizeof(*table->connection_modes));
     }
     
     table->connection_ids[insert_pos] = to;
