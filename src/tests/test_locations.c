@@ -18,6 +18,8 @@ static void test_connect(void);
 static void test_connect_nodes(void);
 static void test_connect_growth(void);
 static void test_connect_duplicates(void);
+static void test_connect_rejects_ancestors(void);
+static void test_add_child_rejects_connected_pairs(void);
 static void test_name_and_get(void);
 static void test_accessors_invalid_ids(void);
 static void test_randomized_model(void);
@@ -39,6 +41,8 @@ void test_locations_run_all(void) {
     test_connect_nodes();
     test_connect_growth();
     test_connect_duplicates();
+    test_connect_rejects_ancestors();
+    test_add_child_rejects_connected_pairs();
     test_name_and_get();
     test_accessors_invalid_ids();
     test_randomized_model();
@@ -73,6 +77,13 @@ static u32 prng_next(u32 *state) {
     x ^= x << 5;
     *state = x;
     return x;
+}
+
+static bool ref_is_ancestor(const u32 *ref_parent, u32 ancestor, u32 node) {
+    for(u32 cur = ref_parent[node]; cur != LOCATION_NONE; cur = ref_parent[cur]) {
+        if(cur == ancestor) { return true; }
+    }
+    return false;
 }
 
 static void test_init_and_free(void) {
@@ -247,7 +258,6 @@ static void test_reserve(void) {
     a[0] = location_table_add(&table, "A", LOCATION_NONE);
     a[1] = location_table_add(&table, "B", a[0]);
     test_require(a[0] != LOCATION_NONE && a[1] != LOCATION_NONE);
-    test_require(location_connect(&table, a[0], a[1], 5, TRAVEL_MODE_WALK));
     
     char name[16];
     u32 parent;
@@ -257,6 +267,7 @@ static void test_reserve(void) {
         a[i] = location_table_add(&table, name, parent);
     }
     test_assert_eq_u32(table.capacity, 8);
+    test_require(location_connect(&table, a[1], a[2], 5, TRAVEL_MODE_WALK));
     for(u32 i = 7; i < 102; ++i) {
         snprintf(name, sizeof(name), "L%u", i);
         parent = (i == 0) ? LOCATION_NONE : (i - 1) / 2;
@@ -264,14 +275,14 @@ static void test_reserve(void) {
     }
     test_assert_eq_u32(table.capacity, 128);
     
-   const u32 expected_children[] = { a[1], a[2] };
-    const u32 expected_ids[] = { a[1] };
+    const u32 expected_children[] = { a[1], a[2] };
+    const u32 expected_ids[] = { a[2] };
     const u32 expected_distances[] = { 5 };
     const u8 expected_modes[] = { TRAVEL_MODE_WALK };
     test_assert(strcmp(location_name(&table, a[1]), "B") == 0);
     test_assert_eq_u32(location_get(&table, a[1])->parent, a[0]);
     test_assert(children_are(&table, a[0], expected_children, 2));
-    test_assert(edges_are(&table, a[0], expected_ids, expected_distances, expected_modes, 1));
+    test_assert(edges_are(&table, a[1], expected_ids, expected_distances, expected_modes, 1));
     
     location_table_free(&table);
 }
@@ -466,6 +477,74 @@ static void test_connect_duplicates(void) {
     location_table_free(&table);
 }
 
+static void test_connect_rejects_ancestors(void) {
+    LocationTable table;
+    test_require(location_table_init(&table, 8));
+    
+    u32 city    = location_table_add(&table, "City",    LOCATION_NONE);
+    u32 north   = location_table_add(&table, "North",   city);
+    u32 south   = location_table_add(&table, "South",   city);
+    u32 house   = location_table_add(&table, "House",   north);
+    u32 kitchen = location_table_add(&table, "Kitchen", house);
+    u32 other   = location_table_add(&table, "Other",   LOCATION_NONE);
+    test_require(other != LOCATION_NONE);
+    
+    test_assert(!location_connect(&table, north, city, 100, TRAVEL_MODE_WALK));
+    test_assert(!location_connect(&table, city, north, 100, TRAVEL_MODE_WALK));
+    test_assert(!location_connect(&table, house, city, 100, TRAVEL_MODE_WALK));
+    test_assert(!location_connect(&table, kitchen, city, 100, TRAVEL_MODE_WALK));
+    test_assert(!location_connect(&table, north, kitchen, 100, TRAVEL_MODE_WALK));
+    test_assert_eq_u32(table.connection_offsets[table.count], 0);
+    
+    test_assert(location_connect(&table, north, south, 100, TRAVEL_MODE_WALK));
+    test_assert(location_connect(&table, house, south, 200, TRAVEL_MODE_WALK));
+    test_assert(location_connect(&table, kitchen, south, 300, TRAVEL_MODE_WALK));
+    test_assert(location_connect(&table, city, other, 400, TRAVEL_MODE_TRAIN));
+    test_assert(location_connect(&table, kitchen, other, 500, TRAVEL_MODE_CAR));
+    test_assert_eq_u32(table.connection_offsets[table.count], 10);
+    
+    location_table_free(&table);
+}
+
+static void test_add_child_rejects_connected_pairs(void) {
+    LocationTable table;
+    test_require(location_table_init(&table, 8));
+    
+    u32 a = location_table_add(&table, "A", LOCATION_NONE);
+    u32 b = location_table_add(&table, "B", LOCATION_NONE);
+    test_require(b != LOCATION_NONE);
+    test_require(location_connect(&table, a, b, 100, TRAVEL_MODE_WALK));
+    test_assert(!location_add_child(&table, a, b));
+    test_assert(!location_add_child(&table, b, a));
+    test_assert_eq_u32(location_get(&table, b)->parent, LOCATION_NONE);
+    test_assert_eq_u32(location_get(&table, a)->parent, LOCATION_NONE);
+    
+    u32 r = location_table_add(&table, "R", LOCATION_NONE);
+    u32 m = location_table_add(&table, "M", r);
+    u32 x = location_table_add(&table, "X", LOCATION_NONE);
+    u32 y = location_table_add(&table, "Y", x);
+    test_require(y != LOCATION_NONE);
+    test_require(location_connect(&table, r, y, 50, TRAVEL_MODE_WALK));
+    test_assert(!location_add_child(&table, m, x));
+    test_assert_eq_u32(location_get(&table, x)->parent, LOCATION_NONE);
+    
+    u32 z = location_table_add(&table, "Z", LOCATION_NONE);
+    u32 q = location_table_add(&table, "Q", z);
+    test_require(q != LOCATION_NONE);
+    test_require(location_connect(&table, q, m, 60, TRAVEL_MODE_WALK));
+    test_assert(!location_add_child(&table, m, z));
+    
+    u32 s = location_table_add(&table, "S", r);
+    u32 w = location_table_add(&table, "W", LOCATION_NONE);
+    u32 v = location_table_add(&table, "V", w);
+    test_require(v != LOCATION_NONE);
+    test_require(location_connect(&table, v, s, 70, TRAVEL_MODE_WALK));
+    test_assert(location_add_child(&table, m, w));
+    test_assert_eq_u32(location_get(&table, w)->parent, m);
+    
+    location_table_free(&table);
+}
+
 static void test_name_and_get(void) {
     LocationTable table;
     test_require(location_table_init(&table, 4));
@@ -549,7 +628,8 @@ static void test_randomized_model(void) {
         for(u32 k = 0; k < ref_degree[a]; ++k) {
             if(ref_ids[a][k] == b && (ref_modes[a][k] & modes) != 0) { overlaps = true; }
         }
-        bool expected = (a != b) && !overlaps;
+        bool related = ref_is_ancestor(ref_parent, a, b) || ref_is_ancestor(ref_parent, b, a);
+        bool expected = (a != b) && !overlaps && !related;
         
         bool actual = location_connect(&table, a, b, distance, modes);
         results_match = results_match && (actual == expected);

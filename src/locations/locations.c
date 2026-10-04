@@ -10,6 +10,8 @@ static bool location_table_reserve(LocationTable *table, u64 capacity);
 static bool name_pool_reserve(LocationTable *table, u64 needed);
 static void child_insert_raw(LocationTable *table, u32 parent, u32 child);
 static bool connection_overlaps(const LocationTable *table, u32 a, u32 b, u8 modes);
+static bool is_ancestor(const LocationTable *table, u32 ancestor, u32 node);
+static bool subtree_connects_to_chain(const LocationTable *table, u32 node, u32 chain_bottom);
 static bool connection_grow(LocationTable *table, u64 needed);
 static void connection_insert_raw(LocationTable *table, u32 from, u32 to, u32 distance, u8 modes);
 
@@ -129,7 +131,7 @@ bool location_add_child(LocationTable *table, u32 parent, u32 child) {
         if(cur == child) { return false; }
         if(++steps > table->count) { return false; }
     }
-    
+    if(subtree_connects_to_chain(table, child, parent)) { return false; }
     child_insert_raw(table, parent, child);
     return true;
 }
@@ -140,7 +142,7 @@ bool location_connect(LocationTable *table, u32 a, u32 b, u32 distance, u8 modes
     if(b >= table->count) { return false; }
     if(a == b) { return false; }
     if(modes == 0) { return false; }
-    
+    if(is_ancestor(table, a, b) || is_ancestor(table, b, a)) { return false; }
     if(connection_overlaps(table, a, b, modes)) { return false; }
     
     u64 total = table->connection_offsets[table->count];
@@ -246,6 +248,30 @@ static bool connection_overlaps(const LocationTable *table, u32 a, u32 b, u8 mod
         if(table->connection_ids[i] == b && (table->connection_modes[i] & modes) != 0) {
             return true;
         }
+    }
+    return false;
+}
+
+static bool is_ancestor(const LocationTable *table, u32 ancestor, u32 node) {
+    u32 steps = 0;
+    for(u32 cur = table->locations[node].parent; cur != LOCATION_NONE; cur = table->locations[cur].parent) {
+        if(cur == ancestor) { return true; }
+        if(++steps > table->count) { return false; }
+    }
+    return false;
+}
+
+static bool subtree_connects_to_chain(const LocationTable *table, u32 node, u32 chain_bottom) {
+    LocationEdges edges = location_edges(table, node);
+    for(u32 i = 0; i < edges.count; ++i) {
+        u32 other = edges.ids[i];
+        if(other == chain_bottom || is_ancestor(table, other, chain_bottom)) { return true; }
+    }
+    
+    u32 child_count = 0;
+    const u32 *children = location_children(table, node, &child_count);
+    for(u32 i = 0; i < child_count; ++i) {
+        if(subtree_connects_to_chain(table, children[i], chain_bottom)) { return true; }
     }
     return false;
 }
