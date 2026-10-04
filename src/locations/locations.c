@@ -290,6 +290,7 @@ static bool subtree_connects_to_chain(const LocationTable *table, u32 root, u32 
     }
 
     free(stack);
+    stack = NULL;
     return found;
 }
 
