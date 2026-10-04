@@ -261,19 +261,36 @@ static bool is_ancestor(const LocationTable *table, u32 ancestor, u32 node) {
     return false;
 }
 
-static bool subtree_connects_to_chain(const LocationTable *table, u32 node, u32 chain_bottom) {
-    LocationEdges edges = location_edges(table, node);
-    for(u32 i = 0; i < edges.count; ++i) {
-        u32 other = edges.ids[i];
-        if(other == chain_bottom || is_ancestor(table, other, chain_bottom)) { return true; }
+static bool subtree_connects_to_chain(const LocationTable *table, u32 root, u32 chain_bottom) {
+    u32 *stack = malloc(sizeof(u32) * (table->count ? table->count : 1));
+    if (stack == NULL) { return true; }
+
+    u32 top = 0;
+    stack[top++] = root;
+    bool found = false;
+
+    while (top > 0 && !found) {
+        u32 node = stack[--top];
+
+        LocationEdges edges = location_edges(table, node);
+        for (u32 i = 0; i < edges.count; ++i) {
+            u32 other = edges.ids[i];
+            if (other == chain_bottom || is_ancestor(table, other, chain_bottom)) {
+                found = true;
+                break;
+            }
+        }
+        if (found) { break; }
+
+        u32 child_count = 0;
+        const u32 *children = location_children(table, node, &child_count);
+        for (u32 i = 0; i < child_count; ++i) {
+            stack[top++] = children[i];
+        }
     }
-    
-    u32 child_count = 0;
-    const u32 *children = location_children(table, node, &child_count);
-    for(u32 i = 0; i < child_count; ++i) {
-        if(subtree_connects_to_chain(table, children[i], chain_bottom)) { return true; }
-    }
-    return false;
+
+    free(stack);
+    return found;
 }
 
 static bool connection_grow(LocationTable *table, u64 needed) {
