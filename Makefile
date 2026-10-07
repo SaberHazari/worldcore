@@ -5,7 +5,7 @@ CC = clang
 LIBS =
 
 # Directories
-PROJECT_DIR     := $(HOME)/life-sim
+PROJECT_DIR     := $(HOME)/worldcore
 SRC_DIR         := src
 TEST_DIR        := $(SRC_DIR)/tests
 BUILD_DIR       := $(PROJECT_DIR)/build
